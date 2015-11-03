@@ -1,0 +1,77 @@
+#!/bin/bash
+set -u
+set -e
+
+function diskofname(){
+    name=$1
+    DISK=$(diskutil list | grep "$name" | tr -s ' ' | cut -d ' ' -f 10)
+}
+
+function unmountname(){
+    diskofname "$1"
+    sudo hdiutil detach "/dev/""$DISK"  -force
+}
+
+if [[ $# -lt 1 ]] ; then
+    >&2 echo "usage: $0 OSX_Installer-app "
+    exit 1;
+fi
+
+#modify dest variable to your preference
+#dest=/Volumes/Seagate_1tib/garage/software/osx_installers
+dest=$(pwd)
+osx_src=$1
+appname=$(basename "$osx_src"| tr -s ' ' '_')
+
+osx_basename=${appname#Install_OS_X_}
+osx_basename=${osx_basename%.app}
+echo $osx_basename
+rm -f "/tmp/""$osx_basename"".cdr.dmg"
+rm -f "$dest""/""$osx_basename""_bootable.iso"
+
+# Mount the installer image
+mntpnt_app=/Volumes/install_"$osx_basename""_app"
+mntpnt_build=/Volumes/install_"$osx_basename""_build"
+
+echo hdiutil attach "$osx_src"/Contents/SharedSupport/InstallESD.dmg -noverify -nobrowse -mountpoint "$mntpnt_app"
+hdiutil attach "$osx_src"/Contents/SharedSupport/InstallESD.dmg -noverify -nobrowse -mountpoint "$mntpnt_app"
+
+# Create the ElCapitan Blank ISO Image of 7316mb with a Single Partition - Apple Partition Map
+hdiutil create -o "/tmp/""$osx_basename"".cdr" -size 7316m -layout SPUD -fs HFS+J
+
+# Mount the ElCapitan Blank ISO Image
+hdiutil attach "/tmp/""$osx_basename"".cdr.dmg" -noverify -nobrowse -mountpoint "$mntpnt_build"
+
+# Restore the Base System into the ElCapitan Blank ISO Image
+asr restore -source "$mntpnt_app"/BaseSystem.dmg -target "$mntpnt_build" -noprompt -noverify -erase
+
+# Remove Package link and replace with actual files
+rm /Volumes/OS\ X\ Base\ System/System/Installation/Packages
+cp -rp "$mntpnt_app"/Packages /Volumes/OS\ X\ Base\ System/System/Installation/
+
+# Copy El Capitan installer dependencies
+echo cp -rp "$mntpnt_app"/BaseSystem.chunklist /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
+cp -rp "$mntpnt_app"/BaseSystem.chunklist /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
+echo cp -rp "$mntpnt_app"/BaseSystem.dmg /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
+cp -rp "$mntpnt_app"/BaseSystem.dmg /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
+
+sudo hdiutil unmount "/Volumes/OS X Base System/"
+
+# Unmount the installer image
+hdiutil detach "$mntpnt_app"
+
+#Sometimes unmount and detach fail becuase of race conditions :( This pause helps. 
+sleep 1
+
+unmountname "OS X Base System"
+
+# Convert the ElCapitan ISO Image to ISO/CD master (Optional)
+rm -f "/tmp/""$osx_basename"".iso.cdr"
+hdiutil convert "/tmp/""$osx_basename"".cdr.dmg" -format UDTO -o "/tmp/""$osx_basename"".iso"
+
+# Rename the ElCapitan ISO Image and move it to the destination
+rm -f "$dest""/""$osx_basename""_bootable.iso"
+sudo mv -v "/tmp/""$osx_basename"".iso.cdr" "$dest""/""$osx_basename""_bootable.iso"
+
+rm -f "/tmp/""$osx_basename"".cdr.dmg"
+
